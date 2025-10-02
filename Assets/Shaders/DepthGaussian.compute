@@ -1,0 +1,38 @@
+#pragma kernel CalculateDepth
+
+#define THREADS_PER_BLOCK 1024
+
+RWStructuredBuffer<float> input;
+RWStructuredBuffer<uint> depth;
+RWStructuredBuffer<uint> index;
+
+
+uniform int vertexSize;
+uniform int vertexCount;
+
+uniform float4x4 viewMat;
+uniform float4x4 modelMatrix;
+
+
+uint Float2Uint(float value){
+    uint mask =  -((int) (asuint(value) >> 31)) | 0x80000000;
+    return asuint(value) ^ mask;
+}
+
+[numthreads(THREADS_PER_BLOCK, 1, 1)]
+void CalculateDepth(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex){
+   
+    if(DTid.x >= vertexCount){
+        return;
+    }
+ 
+    float4 xyz = float4(input[DTid.x*vertexSize], input[DTid.x*vertexSize+1], input[DTid.x*vertexSize+2], 1.0);
+    xyz = mul(modelMatrix, xyz);
+  
+    float4 xyzView = mul(viewMat, xyz);
+
+    depth[DTid.x] = Float2Uint(xyzView.z);
+    index[DTid.x] = asuint(DTid.x);
+
+}
+

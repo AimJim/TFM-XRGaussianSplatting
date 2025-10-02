@@ -1,0 +1,213 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CalculateDepth
+#pragma kernel SortGaussian
+#pragma kernel MoveGaussians
+#pragma kernel CountKernel
+
+#define THREADS_PER_BLOCK 1024
+#define NUM_BUCKETS 16
+
+RWStructuredBuffer<float> Input;
+StructuredBuffer<float> UnchangedInput;
+RWStructuredBuffer<int> Indexes;
+RWStructuredBuffer<float> Depth;
+RWStructuredBuffer<uint> uintDepths;
+RWStructuredBuffer<uint> uintDepths_2;
+RWStructuredBuffer<int> Indexes_2;
+
+
+uniform int vertexSize;
+uniform int vertexCount;
+
+uniform float4x4 viewMat;
+
+uniform float4x4 modelMatrix;
+
+uniform int numBlocks;
+
+
+uint Float2Uint(float value){
+    uint mask =  -((int) (asuint(value) >> 31)) | 0x80000000;
+    return asuint(value) ^ mask;
+}
+
+float Uint2Float(uint value){
+    uint mask = ((value >> 31) -1) | 0x80000000;
+    return asfloat(value ^ mask);
+}
+
+//Preguntar a gonzalo, si es mejor dejarlo asi, o hacer siempre el movimiento pero con matriz identidad y junar la siguiente funcion
+[numthreads(THREADS_PER_BLOCK,1,1)]
+void MoveGaussians(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex){
+   
+    if(DTid.x >= vertexCount){
+        return;
+    }
+   
+    float4 xyz = float4(UnchangedInput[DTid.x*vertexSize], UnchangedInput[DTid.x*vertexSize+1], UnchangedInput[DTid.x*vertexSize+2], 1.0);
+    xyz = mul(modelMatrix, xyz);
+
+    Input[DTid.x*vertexSize] = xyz.x;
+    Input[DTid.x*vertexSize+1] = xyz.y;
+    Input[DTid.x*vertexSize+2] = xyz.z;
+}
+
+//Thread quantity per block
+[numthreads(THREADS_PER_BLOCK,1,1)]
+void CalculateDepth (uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+// group ID, global ID, localId, flattened localId
+{
+    if(DTid.x >= vertexCount){
+        return;
+    }
+    float4 xyz = float4(Input[DTid.x*vertexSize], Input[DTid.x*vertexSize+1], Input[DTid.x*vertexSize+2], 1.0);
+    float4 xyzView = mul(viewMat, xyz);
+
+    
+    Depth[DTid.x] = xyzView.z;
+    uintDepths[DTid.x] = Float2Uint(xyzView);
+    Indexes[DTid.x] = DTid.x;
+
+}
+
+
+
+/*
+REORDENAR GAUSSIANAS
+*/
+RWStructuredBuffer<uint> tempDepths;
+RWStructuredBuffer<int> prefixSum;
+groupshared int sh_hist[16*8];
+
+[numthreads(THREADS_PER_BLOCK, 1, 1)]
+void CountKernel(uint3 Gid : SV_GroupID, uint3 GTid : SV_GroupThreadID){
+    
+    int globalId = GTid.x + Gid.x * THREADS_PER_BLOCK;
+    bool validId = globalId < vertexCount;
+
+    //initialize memory
+    if(GTid.x < 8){
+        [unroll]
+        for(int i = 0; i < 16; i++){
+            sh_hist[i + GTid.x*16] = 0;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    if(validId){
+        float value = Depth[globalId];
+        //Llenar histograma local
+        [unroll]
+        for(int i = 0; i < 32; i += 4){
+            uint currentValue = (Float2Uint(value) >> i) & 0xF;
+            uint currentBlock = (i/4)*16;
+            InterlockedAdd(sh_hist[currentBlock + currentValue], 1);//Memoria group
+        }
+    }
+    //Todos los hilos tienen q pasar por la barrier
+    GroupMemoryBarrierWithGroupSync();
+    
+    //prefix scan local
+    if(GTid.x < 8){
+        [unroll]
+        for(int i = 1; i < 16; i++){
+            sh_hist[i + GTid.x*16] += sh_hist[i-1 + GTid.x*16];
+        }
+    }
+   
+        
+    GroupMemoryBarrierWithGroupSync();
+
+   
+    if(GTid.x < 8){
+        [unroll]
+        for(int i = 0; i < 16; i++){
+            InterlockedAdd(prefixSum[i+GTid.x*16], sh_hist[i+GTid.x*16]);
+        }
+    }
+    
+    
+}
+
+
+
+uniform int shift;
+uniform bool parity;
+groupshared uint sharedKeys[THREADS_PER_BLOCK];
+groupshared uint localHistogram[16];
+groupshared uint localOffsets[THREADS_PER_BLOCK];
+
+//16 digitos 0-F
+[numthreads(THREADS_PER_BLOCK,1,1)]
+void SortGaussian(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex){
+    
+
+
+    //load shMem
+    uint key = 0xFFFFFFFF;
+    int index = 0;
+    if(DTid.x < vertexCount){
+        if(parity){
+            key = uintDepths_2[DTid.x];
+            index = Indexes_2[DTid.x];
+        }else{
+            key = uintDepths[DTid.x];
+            index = Indexes[DTid.x];
+        }
+       
+        
+    }
+    sharedKeys[GTid.x] = key;
+    GroupMemoryBarrierWithGroupSync();
+
+    uint bucket = (key >> shift) & 0xF;
+
+    //Initialize memory
+    if(GTid.x <= 0xF){
+        localHistogram[GTid.x] = 0;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    
+    //Contar cuantos hay en este grupo
+    if(key != 0xFFFFFFFF){
+        InterlockedAdd(localHistogram[bucket], 1);
+    }
+    
+
+    GroupMemoryBarrierWithGroupSync();
+    uint localCount = 0;
+    if(key != 0xFFFFFFFF){
+        
+        for(uint i = 0; i < GTid.x; ++i){
+            uint otherBucket = (sharedKeys[i] >> shift) & 0xF;
+            if(otherBucket == bucket){
+                localCount++;
+            }
+        }
+
+        
+    }
+    localOffsets[GTid.x] = localCount;
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if(key != 0xFFFFFFFF){
+        uint globalOffset = prefixSum[Gid.x * 16 + bucket];
+        uint finalIndex = globalOffset + localOffsets[GTid.x];
+
+        if(DTid.x < vertexCount){
+            if(parity){
+                uintDepths[finalIndex] = key;
+                Indexes[finalIndex] = index;
+            }else{
+                uintDepths_2[finalIndex] = key;
+                Indexes_2[finalIndex] = index;
+            }
+        }
+    }
+    
+    
+}
+
+
