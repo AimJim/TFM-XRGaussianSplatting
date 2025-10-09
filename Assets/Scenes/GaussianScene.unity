@@ -514,10 +514,8 @@ MonoBehaviour:
   material: {fileID: 2100000, guid: d71950ab6aa009843bb1afd00112ab9f, type: 2}
   sortingShader: {fileID: 7200000, guid: 45c17cae450ff29428c286d2f45db483, type: 3}
   depthShader: {fileID: 7200000, guid: 51e0075b5fecce24e9b12d9f39ba9095, type: 3}
-  debug: 1
-  paths:
-  - C:/Users/Xhaim/Desktop/TFM/Plys/f121d198-0/point_cloud/iteration_15000/point_cloud.ply
-  - C:/Users/Xhaim/Desktop/TFM/Plys/68289cef-2/point_cloud/iteration_20000/pulpo.ply
+  debug: 0
+  paths: []
 --- !u!4 &590169631
 Transform:
   m_ObjectHideFlags: 0

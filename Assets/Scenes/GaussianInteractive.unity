@@ -818,10 +818,8 @@ MonoBehaviour:
   - {fileID: 490022437}
   - {fileID: 1329810550}
   gaussianPrefab: {fileID: 8183638607637414177, guid: e3e886dc959faff4bb53fe968cba95a4, type: 3}
-  debug: 1
-  debugGaussians:
-  - C:/Users/Xhaim/Desktop/TFM/Plys/person/person2.ply
-  - C:/Users/Xhaim/Desktop/TFM/Plys/lamp/test/lamp_0143/lamp.ply
+  debug: 0
+  debugGaussians: []
 --- !u!4 &699308882
 Transform:
   m_ObjectHideFlags: 0
